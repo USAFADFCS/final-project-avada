@@ -1,0 +1,87 @@
+import json
+import requests
+from fairlib.core.interfaces.tools import AbstractTool
+
+# Simple city → coordinates lookup
+CITY_COORDS = {
+    "miami": (25.7617, -80.1918),
+    "denver": (39.7392, -104.9903),
+    "orlando": (28.5383, -81.3792),
+    "los angeles": (34.0522, -118.2437),
+    "new york": (40.7128, -74.0060),
+    "chicago": (41.8781, -87.6298),
+    "dallas": (32.7767, -96.7970),
+}
+
+class RestaurantSearchTool(AbstractTool):
+
+    name = "restaurant_search"
+    description = (
+        "Finds restaurants, cafes, and fast-food locations near a given city "
+        "using OpenStreetMap Overpass API. Input must contain 'city' and optional 'radius_km'."
+    )
+
+    def _get_coords(self, city: str):
+        city = city.lower()
+        return CITY_COORDS.get(city)
+
+    def _query_overpass(self, lat, lon, radius_km):
+        radius_m = radius_km * 1000
+
+        query = f"""
+        [out:json];
+        (
+          node["amenity"="restaurant"](around:{radius_m},{lat},{lon});
+          node["amenity"="cafe"](around:{radius_m},{lat},{lon});
+          node["amenity"="fast_food"](around:{radius_m},{lat},{lon});
+        );
+        out;
+        """
+
+        response = requests.post(
+            "https://overpass-api.de/api/interpreter",
+            data={"data": query},
+            timeout=25
+        )
+
+        return response.json()
+
+    def use(self, tool_input: str) -> str:
+        try:
+            payload = json.loads(tool_input)
+        except:
+            return json.dumps({"error": "Invalid JSON input"})
+
+        city = payload.get("city")
+        radius_km = payload.get("radius_km", 2)
+
+        if not city:
+            return json.dumps({"error": "Missing required field: city"})
+
+        coords = self._get_coords(city)
+        if not coords:
+            return json.dumps({"error": f"City '{city}' not supported in lookup table."})
+
+        lat, lon = coords
+
+        try:
+            data = self._query_overpass(lat, lon, radius_km)
+        except Exception as e:
+            return json.dumps({"error": f"Overpass API error: {str(e)}"})
+
+        restaurants = []
+        for el in data.get("elements", []):
+            restaurants.append({
+                "name": el.get("tags", {}).get("name", "Unnamed"),
+                "type": el.get("tags", {}).get("amenity"),
+                "lat": el.get("lat"),
+                "lon": el.get("lon")
+            })
+
+        return json.dumps({
+            "city": city,
+            "radius_km": radius_km,
+            "count": len(restaurants),
+            "restaurants": restaurants[:15]  # limit results
+        }, indent=2)
+

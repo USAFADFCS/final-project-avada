@@ -1,7 +1,7 @@
-# structured_output_formatter_tool.py
 import re
+import json
 
-# ---- Robust import for AbstractTool (works even if paths differ) ----
+# ---- Robust import for AbstractTool ----
 AbstractTool = None
 for path in (
     "fairlib.core.interfaces.tools",
@@ -15,52 +15,106 @@ for path in (
     except Exception:
         pass
 
-# Minimal fallback so the tool still works without the framework import
 if AbstractTool is None:
-    class AbstractTool:  # type: ignore
+    class AbstractTool:  # fallback
         name: str = ""
         description: str = ""
-        def use(self, tool_input: str) -> str:  # pragma: no cover
+        def use(self, tool_input: str) -> str:
             raise NotImplementedError
 
-# ---- Your tool implementation ----
+
 class StructuredOutputFormatterTool(AbstractTool):
-    """
-    Formats itinerary text into a Markdown table:
-    Day | Activity | Restaurant
-    """
+
     name = "structured_output_formatter"
     description = (
-        "Formats an unstructured itinerary into a clean Markdown table. "
-        "Input should contain day-by-day text describing activities and restaurants. "
-        "Example: 'Day 1: Fly to Miami, dinner at Joe’s Stone Crab.'"
+        "Formats an itinerary into structured output. "
+        "Default: Markdown table. "
+        "If input begins with 'JSON:', returns structured itinerary JSON."
     )
 
-    def use(self, tool_input: str) -> str:
-        lines = [line.strip() for line in tool_input.split("\n") if line.strip()]
+    def _extract_fields(self, line):
+        """Extract fields using regex."""
+        entry = {
+            "day": None,
+            "activities": [],
+            "restaurant": None,
+            "hotel": None,
+            "notes": None
+        }
 
+        # Day
+        if m := re.search(r"Day\s*(\d+)", line, re.I):
+            entry["day"] = int(m.group(1))
+
+        # Restaurant
+        if m := re.search(
+            r"(?:eat at|dinner at|lunch at|breakfast at|snacks at|at)\s+([A-Z][\w’'& .-]+)",
+            line,
+            re.I
+        ):
+            entry["restaurant"] = m.group(1).strip()
+
+        # Hotel name
+        if m := re.search(r"(?:stay at|hotel:)\s+([A-Z][\w’'& .-]+)", line, re.I):
+            entry["hotel"] = m.group(1).strip()
+
+        # Extract activity text (remove day + restaurant + hotel phrases)
+        activity = re.sub(r"Day\s*\d+[:\-]?\s*", "", line, flags=re.I)
+        activity = re.sub(
+            r"(eat at|dinner at|lunch at|breakfast at|snacks at|at)\s+[A-Z][\w’'& .-]+",
+            "",
+            activity,
+            flags=re.I
+        )
+        activity = re.sub(
+            r"(stay at|hotel:)\s+[A-Z][\w’'& .-]+",
+            "",
+            activity,
+            flags=re.I
+        )
+
+        activity = activity.strip(" ,.-")
+        if activity:
+            entry["activities"].append(activity)
+
+        return entry
+
+    def _format_markdown(self, lines):
         rows = []
         for line in lines:
-            # Day number (defaults to sequential if missing)
-            m_day = re.search(r"Day\s*(\d+)", line, re.IGNORECASE)
-            day = m_day.group(1) if m_day else str(len(rows) + 1)
-
-            # Restaurant (optional)
-            restaurant = None
-            m_rest = re.search(r"(?:eat at|dinner at|lunch at|at)\s+([A-Z][\w’'& .-]+)", line, re.IGNORECASE)
-            if m_rest:
-                restaurant = m_rest.group(1).strip()
-
-            # Clean activity text
-            activity = re.sub(r"Day\s*\d+[:\-]?\s*", "", line, flags=re.IGNORECASE)
-            if restaurant:
-                activity = re.sub(r"(?:eat at|dinner at|lunch at|at)\s+[A-Z][\w’'& .-]+", "", activity, flags=re.IGNORECASE)
-            activity = activity.strip(",. ").strip()
-
-            rows.append((day, activity, restaurant or "—"))
+            fields = self._extract_fields(line)
+            day = fields["day"] or len(rows) + 1
+            activity = ", ".join(fields["activities"]) if fields["activities"] else "—"
+            restaurant = fields["restaurant"] or "—"
+            rows.append((day, activity, restaurant))
 
         table = "Day | Activity | Restaurant\n"
-        table += "----|-----------|-----------\n"
+        table += "----|----------|-----------\n"
         for d, a, r in rows:
             table += f"{d} | {a} | {r}\n"
         return table
+
+    def _format_json(self, lines):
+        itinerary = []
+        for line in lines:
+            fields = self._extract_fields(line)
+            # Assign missing day sequentially
+            if fields["day"] is None:
+                fields["day"] = len(itinerary) + 1
+            itinerary.append(fields)
+        return json.dumps({"itinerary": itinerary}, indent=2)
+
+    def use(self, tool_input: str) -> str:
+        # JSON mode?
+        json_mode = tool_input.strip().lower().startswith("json:")
+
+        if json_mode:
+            content = tool_input.split(":", 1)[1].strip()
+        else:
+            content = tool_input.strip()
+
+        lines = [line for line in content.split("\n") if line.strip()]
+
+        if json_mode:
+            return self._format_json(lines)
+        return self._format_markdown(lines)
