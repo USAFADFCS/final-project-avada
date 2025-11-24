@@ -1,0 +1,8 @@
+import os, fairlib
+
+root = os.path.dirname(fairlib.__file__)
+for path, dirs, files in os.walk(root):
+    if "react" in path.lower():
+        print("FOUND PLANNER:", path)
+    if "adapter" in path.lower():
+        print("FOUND LLM:", path)
