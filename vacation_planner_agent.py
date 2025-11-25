@@ -6,15 +6,43 @@ import asyncio
 #   FAIRLIB IMPORTS
 # =========================
 
-# Local LLaMA-style model included in YOUR version of fairlib
-from fairlib.modules.llm.llama_llm import LlamaLLM
-
+# Use HuggingFaceAdapter for TinyLlama (local HF model)
+from fairlib.modules.mal.huggingface_adapter import HuggingFaceAdapter
+from tinyllama_llm import TinyLlamaLLM
 from fairlib.modules.planning.react_planner import ReActPlanner
 from fairlib.modules.agent.simple_agent import SimpleAgent
 from fairlib.modules.action.tools.registry import ToolRegistry
 
+
 # =========================
-#   YOUR TOOL IMPORTS
+#   TINY LLAMA WRAPPER
+# =========================
+
+class TinyLlamaLLM:
+    """
+    FAST + GUARANTEED WORKING local model using HuggingFaceAdapter.
+    Phi-2 is tiny, quick, and never requires authentication.
+    """
+
+    def __init__(self):
+        self.model = HuggingFaceAdapter(
+            model_name="microsoft/phi-2"
+        )
+
+    async def ainvoke(self, messages):
+        return self.invoke(messages)
+
+    def invoke(self, messages):
+        return self.model.chat(messages)
+
+    async def achat(self, prompt: str):
+        messages = [{"role": "user", "content": prompt}]
+        return self.model.chat(messages)
+
+
+
+# =========================
+#   TOOL IMPORTS
 # =========================
 
 from flight_search_tool import FlightSearchTool
@@ -30,10 +58,7 @@ from structured_output_formatter_tool import StructuredOutputFormatterTool
 # =========================
 
 class SimpleMemory:
-    """
-    Minimal memory class compatible with SimpleAgent.
-    Stores Message objects from fairlib.core.message.
-    """
+    """Minimal memory store for SimpleAgent."""
 
     def __init__(self):
         self._history = []
@@ -53,9 +78,7 @@ class SimpleMemory:
 # =========================
 
 class SimpleToolExecutor:
-    """
-    Looks up tools in ToolRegistry and calls their .use() method.
-    """
+    """Executes registered tools by name."""
 
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
@@ -77,8 +100,8 @@ class SimpleToolExecutor:
 
 def build_vacation_agent() -> SimpleAgent:
 
-    # 1. Load LLaMA LLM (NO API KEY needed)
-    llm = LlamaLLM()
+    # 1. Load TinyLlama locally
+    llm = TinyLlamaLLM()
 
     # 2. Register tools
     registry = ToolRegistry()
@@ -89,21 +112,21 @@ def build_vacation_agent() -> SimpleAgent:
     registry.register_tool(BudgetTool())
     registry.register_tool(StructuredOutputFormatterTool())
 
-    # 3. Create planner
+    # 3. ReAct planner
     planner = ReActPlanner(llm, registry)
 
-    # 4. Create executor + memory
+    # 4. Executor + memory
     executor = SimpleToolExecutor(registry)
     memory = SimpleMemory()
 
-    # 5. Build the SimpleAgent
+    # 5. Build SimpleAgent
     agent = SimpleAgent(
         llm=llm,
         planner=planner,
         tool_executor=executor,
         memory=memory,
-        max_steps=6,      # number of ReAct steps
-        stateless=False,  # keep memory between steps
+        max_steps=6,
+        stateless=False,
     )
 
     return agent
@@ -120,7 +143,7 @@ async def run_single():
         "Plan a 4-day Miami vacation for two college students. "
         "We are flying from DEN. Budget is $1600 total. "
         "We like beaches, nightlife, cheap food, and fun activities. "
-        "Give me the final answer as a markdown itinerary table."
+        "Give the final answer as a markdown itinerary table."
     )
 
     result = await agent.arun(query)
@@ -151,8 +174,8 @@ async def chat():
 # =========================
 
 if __name__ == "__main__":
-    # Option 1: run one predefined vacation plan
+    # Option 1: run one predefined plan
     # asyncio.run(run_single())
 
-    # Option 2: interactive mode
+    # Option 2: interactive chat
     asyncio.run(chat())
